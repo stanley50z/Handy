@@ -106,6 +106,42 @@ pub enum PostProcessApiFormat {
     Anthropic,
 }
 
+/// Reasoning/thinking effort requested from the post-processing model.
+///
+/// `ProviderDefault` preserves Handy's built-in behavior: reasoning is
+/// forced off for the Custom and OpenRouter providers, and no reasoning
+/// field is sent to any other endpoint (its own default applies). An
+/// explicit level is sent to every provider, translated per endpoint in
+/// `llm_client` (OpenAI-style `reasoning_effort`, OpenRouter's nested
+/// `reasoning` object, DeepSeek's `thinking` toggle, Anthropic thinking
+/// budgets).
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum PostProcessReasoningEffort {
+    #[default]
+    ProviderDefault,
+    None,
+    Minimal,
+    Low,
+    Medium,
+    High,
+}
+
+impl PostProcessReasoningEffort {
+    /// The effort string sent to OpenAI-compatible endpoints, or `None` when
+    /// the user has not chosen a level (built-in per-provider behavior).
+    pub fn explicit_effort(&self) -> Option<&'static str> {
+        match self {
+            PostProcessReasoningEffort::ProviderDefault => None,
+            PostProcessReasoningEffort::None => Some("none"),
+            PostProcessReasoningEffort::Minimal => Some("minimal"),
+            PostProcessReasoningEffort::Low => Some("low"),
+            PostProcessReasoningEffort::Medium => Some("medium"),
+            PostProcessReasoningEffort::High => Some("high"),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Type)]
 pub struct PostProcessProvider {
     pub id: String,
@@ -491,6 +527,8 @@ pub struct AppSettings {
     pub post_process_prompts: Vec<LLMPrompt>,
     #[serde(default)]
     pub post_process_selected_prompt_id: Option<String>,
+    #[serde(default)]
+    pub post_process_reasoning_effort: PostProcessReasoningEffort,
     #[serde(default)]
     pub mute_while_recording: bool,
     #[serde(default)]
@@ -1033,6 +1071,7 @@ pub fn get_default_settings() -> AppSettings {
         post_process_models: default_post_process_models(),
         post_process_prompts: default_post_process_prompts(),
         post_process_selected_prompt_id: None,
+        post_process_reasoning_effort: PostProcessReasoningEffort::default(),
         mute_while_recording: false,
         append_trailing_space: false,
         app_language: default_app_language(),

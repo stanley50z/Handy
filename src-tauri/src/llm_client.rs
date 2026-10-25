@@ -35,9 +35,9 @@ struct ReasoningConfig {
     exclude: Option<bool>,
 }
 
-/// Request fields used to ask an endpoint to skip reasoning/thinking.
+/// Request fields used to control an endpoint's reasoning/thinking effort.
 /// Providers disagree on the field name and accepted values, so at most one of
-/// these is set per request (see `reasoning_disable_params`).
+/// these is set per request (see `reasoning_params`).
 #[derive(Debug, Serialize, Clone, Default, PartialEq)]
 struct ReasoningParams {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -54,16 +54,23 @@ impl ReasoningParams {
     }
 }
 
-/// Pick the reasoning-disable request fields an endpoint understands.
+/// Pick the request fields that ask an endpoint for the given reasoning
+/// effort ("none", "minimal", "low", "medium" or "high").
 /// Unknown endpoints get the common OpenAI-style field; if they reject it,
 /// the request is retried without it (see `send_chat_completion_with_schema`).
-fn reasoning_disable_params(provider: &PostProcessProvider) -> ReasoningParams {
+fn reasoning_params(provider: &PostProcessProvider, effort: &str) -> ReasoningParams {
     let base_url = provider.base_url.to_lowercase();
     if base_url.contains("api.deepseek.com") {
-        // DeepSeek rejects reasoning_effort "none" and uses its own field:
+        // DeepSeek rejects reasoning_effort "none" and uses its own toggle
+        // field, with no effort granularity:
         // https://api-docs.deepseek.com/guides/thinking_mode
+        let thinking_type = if effort == "none" {
+            "disabled"
+        } else {
+            "enabled"
+        };
         ReasoningParams {
-            thinking: Some(serde_json::json!({ "type": "disabled" })),
+            thinking: Some(serde_json::json!({ "type": thinking_type })),
             ..Default::default()
         }
     } else if provider.id == "openrouter" {
@@ -71,20 +78,20 @@ fn reasoning_disable_params(provider: &PostProcessProvider) -> ReasoningParams {
         // of the response so it can't pollute structured-output JSON parsing
         ReasoningParams {
             reasoning: Some(ReasoningConfig {
-                effort: Some("none".to_string()),
+                effort: Some(effort.to_string()),
                 exclude: Some(true),
             }),
             ..Default::default()
         }
     } else {
         ReasoningParams {
-            reasoning_effort: Some("none".to_string()),
+            reasoning_effort: Some(effort.to_string()),
             ..Default::default()
         }
     }
 }
 
-/// Endpoints (base_url|model) that rejected the reasoning-disable fields with a
+/// Endpoints (base_url|model) that rejected the reasoning fields with a
 /// 4xx. Remembered for the lifetime of the process so every dictation after the
 /// first skips the doomed attempt and goes straight to a plain request.
 fn reasoning_rejections() -> &'static Mutex<HashSet<String>> {
@@ -140,11 +147,26 @@ struct ChatMessageResponse {
 /// required. Ample for a cleaned-up dictation.
 const ANTHROPIC_MAX_TOKENS: u32 = 4096;
 
+/// Map a reasoning effort level onto an Anthropic extended-thinking token
+/// budget. `None` (and "none") leave thinking off, which is Anthropic's
+/// default unless a `thinking` field is sent.
+fn anthropic_thinking_budget(reasoning_effort: Option<&str>) -> Option<u32> {
+    match reasoning_effort {
+        Some("minimal") => Some(1024),
+        Some("low") => Some(2048),
+        Some("medium") => Some(4096),
+        Some("high") => Some(8192),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct AnthropicMessagesRequest {
     model: String,
     max_tokens: u32,
     messages: Vec<ChatMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking: Option<Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -345,10 +367,10 @@ pub async fn send_chat_completion(
     api_key: String,
     model: &str,
     prompt: String,
-    disable_reasoning: bool,
+    reasoning_effort: Option<String>,
 ) -> Result<Option<String>, String> {
     if provider.api_format == PostProcessApiFormat::Anthropic {
-        return send_anthropic_message(provider, api_key, model, prompt).await;
+        return send_anthropic_message(provider, api_key, model, prompt, reasoning_effort).await;
     }
 
     send_chat_completion_with_schema(
@@ -358,7 +380,7 @@ pub async fn send_chat_completion(
         prompt,
         None,
         None,
-        disable_reasoning,
+        reasoning_effort,
     )
     .await
 }
@@ -367,12 +389,13 @@ pub async fn send_chat_completion(
 /// When json_schema is provided, uses structured outputs mode.
 /// system_prompt is used as the system message when provided.
 ///
-/// When disable_reasoning is set, the request carries the reasoning-disable
-/// fields the endpoint is expected to understand. Not every OpenAI-compatible
-/// endpoint accepts them (DeepSeek, Gemini's compat layer, and some OpenRouter
-/// upstreams reject with 400), so a 400/422 answer to such a request triggers
-/// one retry without the fields, and the rejection is remembered per
-/// (base_url, model) so later requests skip the failing attempt entirely.
+/// When reasoning_effort is set, the request carries the reasoning fields
+/// for that effort level in the form the endpoint is expected to understand.
+/// Not every OpenAI-compatible endpoint accepts them (DeepSeek, Gemini's
+/// compat layer, and some OpenRouter upstreams reject with 400), so a 400/422
+/// answer to such a request triggers one retry without the fields, and the
+/// rejection is remembered per (base_url, model) so later requests skip the
+/// failing attempt entirely.
 pub async fn send_chat_completion_with_schema(
     provider: &PostProcessProvider,
     api_key: String,
@@ -380,7 +403,7 @@ pub async fn send_chat_completion_with_schema(
     user_content: String,
     system_prompt: Option<String>,
     json_schema: Option<Value>,
-    disable_reasoning: bool,
+    reasoning_effort: Option<String>,
 ) -> Result<Option<String>, String> {
     let base_url = provider.base_url.trim_end_matches('/');
     let url = format!("{}/chat/completions", base_url);
@@ -420,10 +443,9 @@ pub async fn send_chat_completion_with_schema(
     });
 
     let key = endpoint_key(provider, model);
-    let reasoning = if disable_reasoning && !is_known_rejected(&key) {
-        reasoning_disable_params(provider)
-    } else {
-        ReasoningParams::default()
+    let reasoning = match reasoning_effort.as_deref() {
+        Some(effort) if !is_known_rejected(&key) => reasoning_params(provider, effort),
+        _ => ReasoningParams::default(),
     };
 
     let mut request_body = ChatCompletionRequest {
@@ -448,7 +470,7 @@ pub async fn send_chat_completion_with_schema(
         sanitized_url(response.url())
     );
 
-    // A 400/422 on a request carrying reasoning-disable fields is almost always
+    // A 400/422 on a request carrying reasoning fields is almost always
     // the endpoint rejecting those fields — retry once without them.
     if !status.is_success()
         && matches!(status.as_u16(), 400 | 422)
@@ -458,7 +480,7 @@ pub async fn send_chat_completion_with_schema(
             report_reqwest_error("Failed to read reasoning rejection response", &e)
         });
         info!(
-            "Endpoint rejected request with reasoning disabled (status {}): {}. Retrying without reasoning fields",
+            "Endpoint rejected request with reasoning fields (status {}): {}. Retrying without reasoning fields",
             status, error_text
         );
 
@@ -519,13 +541,14 @@ pub async fn send_chat_completion_with_schema(
 /// Send a single-prompt request to an Anthropic Messages API (`/messages`).
 /// Used by every provider with the Anthropic format (the built-in Anthropic
 /// provider and a custom provider set to it). None of them use structured
-/// output, and thinking is off unless requested, so no reasoning fields are
-/// needed.
+/// output. Thinking stays off unless a reasoning effort above "none" is
+/// requested, in which case it maps to a thinking token budget.
 async fn send_anthropic_message(
     provider: &PostProcessProvider,
     api_key: String,
     model: &str,
     prompt: String,
+    reasoning_effort: Option<String>,
 ) -> Result<Option<String>, String> {
     let url = format!("{}/messages", provider.base_url.trim_end_matches('/'));
 
@@ -534,13 +557,20 @@ async fn send_anthropic_message(
         sanitized_url_for_log(&url)
     );
 
+    // Anthropic counts thinking tokens against max_tokens and requires the
+    // budget to stay below it, so the output budget grows by the budget.
+    let thinking_budget = anthropic_thinking_budget(reasoning_effort.as_deref());
+    let max_tokens = ANTHROPIC_MAX_TOKENS + thinking_budget.unwrap_or(0);
+
     let request_body = AnthropicMessagesRequest {
         model: model.to_string(),
-        max_tokens: ANTHROPIC_MAX_TOKENS,
+        max_tokens,
         messages: vec![ChatMessage {
             role: "user".to_string(),
             content: prompt,
         }],
+        thinking: thinking_budget
+            .map(|budget| serde_json::json!({ "type": "enabled", "budget_tokens": budget })),
     };
 
     let response = create_client(provider, &api_key)?
@@ -578,7 +608,7 @@ async fn send_anthropic_message(
     if message.stop_reason.as_deref() == Some("max_tokens") {
         return Err(format!(
             "Response was truncated at the {} token limit",
-            ANTHROPIC_MAX_TOKENS
+            max_tokens
         ));
     }
 
@@ -810,7 +840,7 @@ mod tests {
 
     #[test]
     fn custom_provider_uses_top_level_reasoning_effort() {
-        let params = reasoning_disable_params(&provider("custom", "http://localhost:11434/v1"));
+        let params = reasoning_params(&provider("custom", "http://localhost:11434/v1"), "none");
         let json = request_json(params);
         assert_eq!(json["reasoning_effort"], "none");
         assert!(json.get("reasoning").is_none());
@@ -819,8 +849,10 @@ mod tests {
 
     #[test]
     fn openrouter_uses_nested_reasoning_object() {
-        let params =
-            reasoning_disable_params(&provider("openrouter", "https://openrouter.ai/api/v1"));
+        let params = reasoning_params(
+            &provider("openrouter", "https://openrouter.ai/api/v1"),
+            "none",
+        );
         let json = request_json(params);
         assert!(json.get("reasoning_effort").is_none());
         assert_eq!(json["reasoning"]["effort"], "none");
@@ -830,11 +862,46 @@ mod tests {
 
     #[test]
     fn deepseek_base_url_uses_thinking_disabled() {
-        let params = reasoning_disable_params(&provider("custom", "https://api.deepseek.com"));
+        let params = reasoning_params(&provider("custom", "https://api.deepseek.com"), "none");
         let json = request_json(params);
         assert!(json.get("reasoning_effort").is_none());
         assert!(json.get("reasoning").is_none());
         assert_eq!(json["thinking"]["type"], "disabled");
+    }
+
+    #[test]
+    fn explicit_effort_levels_are_sent_per_provider_shape() {
+        let json = request_json(reasoning_params(
+            &provider("openai", "https://api.openai.com/v1"),
+            "high",
+        ));
+        assert_eq!(json["reasoning_effort"], "high");
+
+        let json = request_json(reasoning_params(
+            &provider("openrouter", "https://openrouter.ai/api/v1"),
+            "low",
+        ));
+        assert_eq!(json["reasoning"]["effort"], "low");
+        assert_eq!(json["reasoning"]["exclude"], true);
+
+        // DeepSeek has no effort granularity: any level above "none" enables
+        // its thinking toggle.
+        let json = request_json(reasoning_params(
+            &provider("custom", "https://api.deepseek.com"),
+            "medium",
+        ));
+        assert_eq!(json["thinking"]["type"], "enabled");
+    }
+
+    #[test]
+    fn anthropic_thinking_budget_maps_effort_levels() {
+        assert_eq!(anthropic_thinking_budget(None), None);
+        assert_eq!(anthropic_thinking_budget(Some("none")), None);
+        assert_eq!(anthropic_thinking_budget(Some("minimal")), Some(1024));
+        assert_eq!(anthropic_thinking_budget(Some("low")), Some(2048));
+        assert_eq!(anthropic_thinking_budget(Some("medium")), Some(4096));
+        assert_eq!(anthropic_thinking_budget(Some("high")), Some(8192));
+        assert_eq!(anthropic_thinking_budget(Some("unknown")), None);
     }
 
     #[test]
@@ -890,12 +957,14 @@ mod tests {
                 role: "user".to_string(),
                 content: "hi".to_string(),
             }],
+            thinking: None,
         };
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["max_tokens"], ANTHROPIC_MAX_TOKENS);
         assert_eq!(json["messages"][0]["role"], "user");
         assert!(json.get("stream").is_none());
         assert!(json.get("reasoning_effort").is_none());
+        assert!(json.get("thinking").is_none());
     }
 
     #[test]
@@ -922,7 +991,7 @@ mod tests {
             "key".to_string(),
             "claude-haiku",
             "raw text".to_string(),
-            true,
+            Some("none".to_string()),
         )
         .await;
         assert_eq!(result, Ok(Some("Cleaned text".to_string())));
@@ -940,7 +1009,7 @@ mod tests {
             "key".to_string(),
             "test-model",
             "raw text".to_string(),
-            false,
+            None,
         )
         .await;
         assert!(result.unwrap_err().contains("truncated"));
@@ -958,7 +1027,7 @@ mod tests {
             "key".to_string(),
             "claude-haiku",
             "raw text".to_string(),
-            true,
+            Some("none".to_string()),
         )
         .await;
         assert!(result.unwrap_err().contains("truncated"));
