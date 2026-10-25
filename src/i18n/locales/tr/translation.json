@@ -7,7 +7,9 @@
     "model": "Model",
     "quit": "Çıkış",
     "cancel": "İptal",
-    "secureInputWarning": "⚠ Kısayollar Secure Input tarafından engelleniyor"
+    "secureInputWarning": "⚠ Kısayollar Secure Input tarafından engelleniyor",
+    "microphone": "Microphone",
+    "defaultMicrophone": "Default"
   },
   "sidebar": {
     "general": "Genel",
@@ -660,6 +662,18 @@
           "placeholderWithOptions": "Model ara veya seç",
           "placeholderNoOptions": "Model adı yazın",
           "refreshModels": "Modelleri Yenile"
+        },
+        "reasoningEffort": {
+          "title": "Reasoning Effort",
+          "description": "How much reasoning/thinking to request from the post-processing model. Provider Default keeps Handy's built-in behavior: reasoning is forced off for the Custom and OpenRouter providers and left to the provider everywhere else.",
+          "options": {
+            "provider_default": "Provider Default",
+            "none": "None (disable reasoning)",
+            "minimal": "Minimal",
+            "low": "Low",
+            "medium": "Medium",
+            "high": "High"
+          }
         }
       },
       "prompts": {

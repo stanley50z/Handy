@@ -7,7 +7,9 @@
     "model": "Modello",
     "quit": "Esci",
     "cancel": "Annulla",
-    "secureInputWarning": "⚠ Scorciatoie bloccate da Secure Input"
+    "secureInputWarning": "⚠ Scorciatoie bloccate da Secure Input",
+    "microphone": "Microphone",
+    "defaultMicrophone": "Default"
   },
   "sidebar": {
     "general": "Generale",
@@ -660,6 +662,18 @@
           "placeholderWithOptions": "Cerca o scegli un modello",
           "placeholderNoOptions": "Digita il nome di un modello",
           "refreshModels": "Aggiorna modelli"
+        },
+        "reasoningEffort": {
+          "title": "Reasoning Effort",
+          "description": "How much reasoning/thinking to request from the post-processing model. Provider Default keeps Handy's built-in behavior: reasoning is forced off for the Custom and OpenRouter providers and left to the provider everywhere else.",
+          "options": {
+            "provider_default": "Provider Default",
+            "none": "None (disable reasoning)",
+            "minimal": "Minimal",
+            "low": "Low",
+            "medium": "Medium",
+            "high": "High"
+          }
         }
       },
       "prompts": {

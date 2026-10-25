@@ -342,6 +342,45 @@ fn initialize_core_logic(app_handle: &AppHandle) {
                     tray::update_tray_menu(&app_clone);
                 });
             }
+            id if id.starts_with("mic_select:") => {
+                let mic_id = id.strip_prefix("mic_select:").unwrap().to_string();
+                let current_mic = settings::get_settings(app)
+                    .selected_microphone
+                    .unwrap_or_else(|| "default".to_string());
+                if mic_id == current_mic {
+                    return;
+                }
+                let app_clone = app.clone();
+                std::thread::spawn(move || {
+                    // set_selected_microphone_blocking persists the setting and
+                    // restarts the capture stream — keep it off the main thread.
+                    match commands::audio::set_selected_microphone_blocking(
+                        &app_clone,
+                        mic_id.clone(),
+                    ) {
+                        Ok(()) => {
+                            log::info!("Microphone switched to {} via tray.", mic_id);
+                            // The settings window re-fetches on this event, so
+                            // its microphone dropdown stays in sync.
+                            let _ = app_clone.emit(
+                                "settings-changed",
+                                serde_json::json!({
+                                    "setting": "selected_microphone",
+                                    "value": if mic_id == "default" {
+                                        "Default".to_string()
+                                    } else {
+                                        mic_id.clone()
+                                    }
+                                }),
+                            );
+                        }
+                        Err(e) => {
+                            log::error!("Failed to switch microphone via tray: {}", e);
+                        }
+                    }
+                    tray::update_tray_menu(&app_clone);
+                });
+            }
             _ => {}
         })
         .build(app_handle)
@@ -692,6 +731,7 @@ pub fn run(cli_args: CliArgs) {
             shortcut::change_post_process_api_format_setting,
             shortcut::change_post_process_api_key_setting,
             shortcut::change_post_process_model_setting,
+            shortcut::change_post_process_reasoning_effort_setting,
             shortcut::set_post_process_provider,
             shortcut::fetch_post_process_models,
             shortcut::add_post_process_prompt,

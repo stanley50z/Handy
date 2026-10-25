@@ -7,7 +7,9 @@
     "model": "模型",
     "quit": "退出",
     "cancel": "取消",
-    "secureInputWarning": "⚠ 快捷键被 Secure Input 阻止"
+    "secureInputWarning": "⚠ 快捷键被 Secure Input 阻止",
+    "microphone": "Microphone",
+    "defaultMicrophone": "Default"
   },
   "sidebar": {
     "general": "通用",
@@ -660,6 +662,18 @@
           "placeholderWithOptions": "搜索或选择模型",
           "placeholderNoOptions": "输入模型名称",
           "refreshModels": "刷新模型"
+        },
+        "reasoningEffort": {
+          "title": "Reasoning Effort",
+          "description": "How much reasoning/thinking to request from the post-processing model. Provider Default keeps Handy's built-in behavior: reasoning is forced off for the Custom and OpenRouter providers and left to the provider everywhere else.",
+          "options": {
+            "provider_default": "Provider Default",
+            "none": "None (disable reasoning)",
+            "minimal": "Minimal",
+            "low": "Low",
+            "medium": "Medium",
+            "high": "High"
+          }
         }
       },
       "prompts": {

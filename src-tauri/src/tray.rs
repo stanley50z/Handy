@@ -29,7 +29,7 @@ use log::{debug, error, info, trace, warn};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tauri::image::Image;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::TrayIcon;
@@ -64,6 +64,12 @@ struct MenuInputs {
     selected_model: String,
     /// `(id, name)` of downloaded models, sorted by name.
     downloaded_models: Vec<(String, String)>,
+    /// Persisted microphone preference (`None` = system default). Devices are
+    /// keyed by name, matching `settings.selected_microphone`.
+    selected_microphone: Option<String>,
+    /// Names of available input devices in enumeration order, excluding the
+    /// synthetic "Default" entry (rendered from `selected_microphone`).
+    microphones: Vec<String>,
     locale: String,
     update_checks_enabled: bool,
 }
@@ -96,6 +102,10 @@ struct TrayInner {
     next_seq: u64,
     /// Sequence number of the request that produced `desired`.
     desired_seq: u64,
+    /// Last enumerated microphone names. Device enumeration can stall, and
+    /// tray syncs happen on the recording hot path, so the list is refreshed
+    /// at most once per `MIC_CACHE_TTL` instead of on every snapshot.
+    mic_cache: Option<(Instant, Vec<String>)>,
 }
 
 /// Tauri managed state owning the tray's desired/applied snapshots.
@@ -112,6 +122,7 @@ impl TrayState {
             icons: HashMap::new(),
             next_seq: 0,
             desired_seq: 0,
+            mic_cache: None,
         }))
     }
 
@@ -319,6 +330,56 @@ fn sync_tray_with(app: &AppHandle, update: impl FnOnce(&mut TrayInner)) {
     }
 }
 
+/// How long the enumerated microphone list is reused before re-enumerating.
+/// Short enough that a freshly plugged-in device shows up promptly when the
+/// user next opens the tray menu, long enough to keep enumeration off the
+/// recording start/stop path.
+const MIC_CACHE_TTL: Duration = Duration::from_secs(10);
+
+/// Names of the available input devices, in enumeration order. Monitor
+/// sources and any device literally named "default" are dropped: monitors
+/// record speaker output (see `commands::audio::get_available_microphones`),
+/// and "default" is the sentinel for the system-default selection.
+fn enumerate_microphones() -> Vec<String> {
+    let devices = match handy_recorder::list_input_devices() {
+        Ok(devices) => devices,
+        Err(err) => {
+            debug!("Failed to list microphones for tray menu: {err}");
+            return Vec::new();
+        }
+    };
+
+    let mut names: Vec<String> = Vec::new();
+    for device in devices {
+        if device.is_monitor || device.name.eq_ignore_ascii_case("default") {
+            continue;
+        }
+        if !names.contains(&device.name) {
+            names.push(device.name);
+        }
+    }
+    names
+}
+
+/// Microphone names for the menu snapshot, served from the tray state's
+/// cache unless it is older than `MIC_CACHE_TTL`. Enumeration runs outside
+/// the state lock so a slow backend never blocks other tray updates.
+fn cached_microphones(app: &AppHandle) -> Vec<String> {
+    let Some(state) = app.try_state::<TrayState>() else {
+        return enumerate_microphones();
+    };
+
+    if let Some((cached_at, names)) = &state.lock().mic_cache {
+        if cached_at.elapsed() < MIC_CACHE_TTL {
+            return names.clone();
+        }
+    }
+
+    let names = enumerate_microphones();
+    state.lock().mic_cache = Some((Instant::now(), names.clone()));
+    names
+}
+
 fn compute_desired(app: &AppHandle, icon_state: TrayIconState) -> TrayDesired {
     let settings = settings::get_settings(app);
     let theme = get_current_theme(app);
@@ -345,6 +406,8 @@ fn compute_desired(app: &AppHandle, icon_state: TrayIconState) -> TrayDesired {
             model_loaded,
             selected_model: settings.selected_model,
             downloaded_models,
+            selected_microphone: settings.selected_microphone,
+            microphones: cached_microphones(app),
             locale: settings.app_language,
             update_checks_enabled: settings.update_checks_enabled,
         },
@@ -568,6 +631,45 @@ fn build_menu(app: &AppHandle, inputs: &MenuInputs) -> tauri::Result<(Menu<tauri
             None::<&str>,
         )?;
 
+        // Build microphone submenu — label is the active microphone name,
+        // mirroring the model submenu. Locales that haven't translated the
+        // keys yet get the English strings rather than blank items.
+        let english = get_tray_translations(Some("en".to_string()));
+        let microphone_label = if strings.microphone.is_empty() {
+            english.microphone.clone()
+        } else {
+            strings.microphone.clone()
+        };
+        let default_label = if strings.default_microphone.is_empty() {
+            english.default_microphone.clone()
+        } else {
+            strings.default_microphone.clone()
+        };
+        let mic_submenu_label = inputs
+            .selected_microphone
+            .as_ref()
+            .filter(|name| inputs.microphones.contains(name))
+            .cloned()
+            .unwrap_or(microphone_label);
+
+        let microphone_submenu =
+            Submenu::with_id(app, "microphone_submenu", &mic_submenu_label, true)?;
+        let default_item = CheckMenuItem::with_id(
+            app,
+            "mic_select:default",
+            &default_label,
+            true,
+            inputs.selected_microphone.is_none(),
+            None::<&str>,
+        )?;
+        microphone_submenu.append(&default_item)?;
+        for name in &inputs.microphones {
+            let is_active = inputs.selected_microphone.as_deref() == Some(name.as_str());
+            let item_id = format!("mic_select:{}", name);
+            let item = CheckMenuItem::with_id(app, &item_id, name, true, is_active, None::<&str>)?;
+            microphone_submenu.append(&item)?;
+        }
+
         Menu::with_items(
             app,
             &[
@@ -577,6 +679,7 @@ fn build_menu(app: &AppHandle, inputs: &MenuInputs) -> tauri::Result<(Menu<tauri
                 &separator()?,
                 &model_submenu,
                 &unload_model_i,
+                &microphone_submenu,
                 &separator()?,
                 &settings_i,
                 &check_updates_i,
@@ -710,6 +813,8 @@ mod tests {
             model_loaded: true,
             selected_model: "small".to_string(),
             downloaded_models: vec![("small".to_string(), "Small".to_string())],
+            selected_microphone: None,
+            microphones: vec!["USB Mic".to_string()],
             locale: "en".to_string(),
             update_checks_enabled: true,
         }
@@ -758,5 +863,20 @@ mod tests {
     #[test]
     fn idle_and_busy_menus_differ() {
         assert_ne!(inputs(false), inputs(true));
+    }
+
+    #[test]
+    fn microphone_changes_rebuild_the_menu() {
+        // The checkmark and device list live in MenuInputs, so switching the
+        // selection or plugging in a device must produce a different snapshot.
+        let base = inputs(false);
+
+        let mut switched = base.clone();
+        switched.selected_microphone = Some("USB Mic".to_string());
+        assert_ne!(base, switched);
+
+        let mut plugged_in = base.clone();
+        plugged_in.microphones.push("Headset Mic".to_string());
+        assert_ne!(base, plugged_in);
     }
 }
