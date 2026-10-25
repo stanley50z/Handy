@@ -36,8 +36,8 @@ struct ReasoningConfig {
 }
 
 /// Request fields used to control an endpoint's reasoning/thinking effort.
-/// Providers disagree on the field name and accepted values, so at most one of
-/// these is set per request (see `reasoning_params`).
+/// Providers disagree on the field name and accepted values. Usually only one
+/// shape is set; DeepSeek pairs its toggle with `reasoning_effort`.
 #[derive(Debug, Serialize, Clone, Default, PartialEq)]
 struct ReasoningParams {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -55,22 +55,31 @@ impl ReasoningParams {
 }
 
 /// Pick the request fields that ask an endpoint for the given reasoning
-/// effort ("none", "minimal", "low", "medium" or "high").
+/// effort ("none", "minimal", "low", "medium", "high", "xhigh", or "max").
 /// Unknown endpoints get the common OpenAI-style field; if they reject it,
 /// the request is retried without it (see `send_chat_completion_with_schema`).
 fn reasoning_params(provider: &PostProcessProvider, effort: &str) -> ReasoningParams {
     let base_url = provider.base_url.to_lowercase();
     if base_url.contains("api.deepseek.com") {
-        // DeepSeek rejects reasoning_effort "none" and uses its own toggle
-        // field, with no effort granularity:
+        // DeepSeek uses a thinking toggle plus reasoning_effort. Its native
+        // effort values are low/high/max; the intermediate OpenAI-style
+        // labels map onto them as documented:
         // https://api-docs.deepseek.com/guides/thinking_mode
-        let thinking_type = if effort == "none" {
-            "disabled"
-        } else {
-            "enabled"
+        if effort == "none" {
+            return ReasoningParams {
+                thinking: Some(serde_json::json!({ "type": "disabled" })),
+                ..Default::default()
+            };
+        }
+
+        let deepseek_effort = match effort {
+            "minimal" | "low" => "low",
+            "max" => "max",
+            _ => "high",
         };
         ReasoningParams {
-            thinking: Some(serde_json::json!({ "type": thinking_type })),
+            reasoning_effort: Some(deepseek_effort.to_string()),
+            thinking: Some(serde_json::json!({ "type": "enabled" })),
             ..Default::default()
         }
     } else if provider.id == "openrouter" {
@@ -156,6 +165,8 @@ fn anthropic_thinking_budget(reasoning_effort: Option<&str>) -> Option<u32> {
         Some("low") => Some(2048),
         Some("medium") => Some(4096),
         Some("high") => Some(8192),
+        Some("xhigh") => Some(16384),
+        Some("max") => Some(32768),
         _ => None,
     }
 }
@@ -873,24 +884,32 @@ mod tests {
     fn explicit_effort_levels_are_sent_per_provider_shape() {
         let json = request_json(reasoning_params(
             &provider("openai", "https://api.openai.com/v1"),
-            "high",
+            "xhigh",
         ));
-        assert_eq!(json["reasoning_effort"], "high");
+        assert_eq!(json["reasoning_effort"], "xhigh");
 
         let json = request_json(reasoning_params(
             &provider("openrouter", "https://openrouter.ai/api/v1"),
-            "low",
+            "max",
         ));
-        assert_eq!(json["reasoning"]["effort"], "low");
+        assert_eq!(json["reasoning"]["effort"], "max");
         assert_eq!(json["reasoning"]["exclude"], true);
 
-        // DeepSeek has no effort granularity: any level above "none" enables
-        // its thinking toggle.
+        // DeepSeek pairs its thinking toggle with a normalized
+        // reasoning_effort: medium and xhigh both run as high.
         let json = request_json(reasoning_params(
             &provider("custom", "https://api.deepseek.com"),
-            "medium",
+            "xhigh",
         ));
         assert_eq!(json["thinking"]["type"], "enabled");
+        assert_eq!(json["reasoning_effort"], "high");
+
+        let json = request_json(reasoning_params(
+            &provider("custom", "https://api.deepseek.com"),
+            "max",
+        ));
+        assert_eq!(json["thinking"]["type"], "enabled");
+        assert_eq!(json["reasoning_effort"], "max");
     }
 
     #[test]
@@ -901,6 +920,8 @@ mod tests {
         assert_eq!(anthropic_thinking_budget(Some("low")), Some(2048));
         assert_eq!(anthropic_thinking_budget(Some("medium")), Some(4096));
         assert_eq!(anthropic_thinking_budget(Some("high")), Some(8192));
+        assert_eq!(anthropic_thinking_budget(Some("xhigh")), Some(16384));
+        assert_eq!(anthropic_thinking_budget(Some("max")), Some(32768));
         assert_eq!(anthropic_thinking_budget(Some("unknown")), None);
     }
 

@@ -1333,10 +1333,10 @@ export type PostProcessProvider = { id: string; label: string; base_url: string;
  * field is sent to any other endpoint (its own default applies). An
  * explicit level is sent to every provider, translated per endpoint in
  * `llm_client` (OpenAI-style `reasoning_effort`, OpenRouter's nested
- * `reasoning` object, DeepSeek's `thinking` toggle, Anthropic thinking
- * budgets).
+ * `reasoning` object, DeepSeek's thinking toggle plus normalized effort,
+ * Anthropic thinking budgets).
  */
-export type PostProcessReasoningEffort = "provider_default" | "none" | "minimal" | "low" | "medium" | "high"
+export type PostProcessReasoningEffort = "provider_default" | "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"
 /**
  * Recording phase events for windows that follow along (onboarding's Try it).
  */

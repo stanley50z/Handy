@@ -113,8 +113,8 @@ pub enum PostProcessApiFormat {
 /// field is sent to any other endpoint (its own default applies). An
 /// explicit level is sent to every provider, translated per endpoint in
 /// `llm_client` (OpenAI-style `reasoning_effort`, OpenRouter's nested
-/// `reasoning` object, DeepSeek's `thinking` toggle, Anthropic thinking
-/// budgets).
+/// `reasoning` object, DeepSeek's thinking toggle plus normalized effort,
+/// Anthropic thinking budgets).
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, Type)]
 #[serde(rename_all = "snake_case")]
 pub enum PostProcessReasoningEffort {
@@ -125,6 +125,9 @@ pub enum PostProcessReasoningEffort {
     Low,
     Medium,
     High,
+    #[serde(rename = "xhigh")]
+    XHigh,
+    Max,
 }
 
 impl PostProcessReasoningEffort {
@@ -138,6 +141,8 @@ impl PostProcessReasoningEffort {
             PostProcessReasoningEffort::Low => Some("low"),
             PostProcessReasoningEffort::Medium => Some("medium"),
             PostProcessReasoningEffort::High => Some("high"),
+            PostProcessReasoningEffort::XHigh => Some("xhigh"),
+            PostProcessReasoningEffort::Max => Some("max"),
         }
     }
 }
@@ -1463,6 +1468,26 @@ pub fn get_recording_retention_period(app: &AppHandle) -> RecordingRetentionPeri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reasoning_effort_includes_xhigh_and_max_wire_values() {
+        assert_eq!(
+            PostProcessReasoningEffort::XHigh.explicit_effort(),
+            Some("xhigh")
+        );
+        assert_eq!(
+            PostProcessReasoningEffort::Max.explicit_effort(),
+            Some("max")
+        );
+        assert_eq!(
+            serde_json::to_value(PostProcessReasoningEffort::XHigh).unwrap(),
+            serde_json::json!("xhigh")
+        );
+        assert_eq!(
+            serde_json::from_value::<PostProcessReasoningEffort>(serde_json::json!("max")).unwrap(),
+            PostProcessReasoningEffort::Max
+        );
+    }
 
     #[test]
     fn stored_binding_returns_the_requested_binding() {
