@@ -1,7 +1,11 @@
 import React, { useEffect, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { RefreshCcw } from "lucide-react";
-import { commands, type PostProcessApiFormat } from "@/bindings";
+import {
+  commands,
+  type PostProcessApiFormat,
+  type PostProcessReasoningEffort,
+} from "@/bindings";
 
 import { Alert } from "../../ui/Alert";
 import {
@@ -21,6 +25,50 @@ import { ModelSelect } from "../PostProcessingSettingsApi/ModelSelect";
 import { usePostProcessProviderState } from "../PostProcessingSettingsApi/usePostProcessProviderState";
 import { ShortcutInput } from "../ShortcutInput";
 import { useSettings } from "../../../hooks/useSettings";
+
+const REASONING_EFFORT_LEVELS: PostProcessReasoningEffort[] = [
+  "provider_default",
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+];
+
+const ReasoningEffortSetting: React.FC = () => {
+  const { t } = useTranslation();
+  const { getSetting, updateSetting, isUpdating } = useSettings();
+
+  const effort =
+    getSetting("post_process_reasoning_effort") || "provider_default";
+
+  return (
+    <SettingContainer
+      title={t("settings.postProcessing.api.reasoningEffort.title")}
+      description={t("settings.postProcessing.api.reasoningEffort.description")}
+      descriptionMode="tooltip"
+      layout="horizontal"
+      grouped={true}
+    >
+      <Dropdown
+        options={REASONING_EFFORT_LEVELS.map((level) => ({
+          value: level,
+          label: t(
+            `settings.postProcessing.api.reasoningEffort.options.${level}`,
+          ),
+        }))}
+        selectedValue={effort}
+        onSelect={(value) =>
+          updateSetting(
+            "post_process_reasoning_effort",
+            value as PostProcessReasoningEffort,
+          )
+        }
+        disabled={isUpdating("post_process_reasoning_effort")}
+      />
+    </SettingContainer>
+  );
+};
 
 const PostProcessingSettingsApiComponent: React.FC = () => {
   const { t } = useTranslation();
@@ -177,6 +225,8 @@ const PostProcessingSettingsApiComponent: React.FC = () => {
           </div>
         </SettingContainer>
       )}
+
+      {!state.isAppleProvider && <ReasoningEffortSetting />}
     </>
   );
 };
