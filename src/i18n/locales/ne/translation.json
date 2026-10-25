@@ -10,7 +10,9 @@
     "secureInputWarning": "⚠ Secure Input ले सर्टकटहरू रोकेको छ",
     "language": "भाषा",
     "autoLanguage": "स्वतः",
-    "otherLanguages": "अन्य भाषाहरू"
+    "otherLanguages": "अन्य भाषाहरू",
+    "microphone": "Microphone",
+    "defaultMicrophone": "Default"
   },
   "sidebar": {
     "general": "सामान्य",
@@ -666,6 +668,18 @@
           "placeholderWithOptions": "मोडेल खोज्नुहोस् वा चयन गर्नुहोस्",
           "placeholderNoOptions": "मोडेलको नाम टाइप गर्नुहोस्",
           "refreshModels": "मोडेलहरू रिफ्रेस गर्नुहोस्"
+        },
+        "reasoningEffort": {
+          "title": "Reasoning Effort",
+          "description": "How much reasoning/thinking to request from the post-processing model. Provider Default keeps Handy's built-in behavior: reasoning is forced off for the Custom and OpenRouter providers and left to the provider everywhere else.",
+          "options": {
+            "provider_default": "Provider Default",
+            "none": "None (disable reasoning)",
+            "minimal": "Minimal",
+            "low": "Low",
+            "medium": "Medium",
+            "high": "High"
+          }
         }
       },
       "prompts": {

@@ -10,7 +10,9 @@
     "secureInputWarning": "⚠ Комбінації клавіш заблоковано Secure Input",
     "language": "Мова",
     "autoLanguage": "Авто",
-    "otherLanguages": "Інші мови"
+    "otherLanguages": "Інші мови",
+    "microphone": "Microphone",
+    "defaultMicrophone": "Default"
   },
   "sidebar": {
     "general": "Загальні",
@@ -666,6 +668,18 @@
           "placeholderWithOptions": "Шукайте або оберіть модель",
           "placeholderNoOptions": "Введіть назву моделі",
           "refreshModels": "Оновити моделі"
+        },
+        "reasoningEffort": {
+          "title": "Reasoning Effort",
+          "description": "How much reasoning/thinking to request from the post-processing model. Provider Default keeps Handy's built-in behavior: reasoning is forced off for the Custom and OpenRouter providers and left to the provider everywhere else.",
+          "options": {
+            "provider_default": "Provider Default",
+            "none": "None (disable reasoning)",
+            "minimal": "Minimal",
+            "low": "Low",
+            "medium": "Medium",
+            "high": "High"
+          }
         }
       },
       "prompts": {
