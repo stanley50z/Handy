@@ -10,7 +10,9 @@
     "secureInputWarning": "⚠ ปุ่มลัดถูกบล็อกโดย Secure Input",
     "language": "ภาษา",
     "autoLanguage": "อัตโนมัติ",
-    "otherLanguages": "ภาษาอื่น"
+    "otherLanguages": "ภาษาอื่น",
+    "microphone": "Microphone",
+    "defaultMicrophone": "Default"
   },
   "sidebar": {
     "general": "ทั่วไป",
