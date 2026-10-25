@@ -33,6 +33,8 @@ const REASONING_EFFORT_LEVELS: PostProcessReasoningEffort[] = [
   "low",
   "medium",
   "high",
+  "xhigh",
+  "max",
 ];
 
 const ReasoningEffortSetting: React.FC = () => {
