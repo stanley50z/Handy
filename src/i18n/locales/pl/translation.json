@@ -678,7 +678,9 @@
             "minimal": "Minimal",
             "low": "Low",
             "medium": "Medium",
-            "high": "High"
+            "high": "High",
+            "xhigh": "XHigh",
+            "max": "Max"
           }
         }
       },
