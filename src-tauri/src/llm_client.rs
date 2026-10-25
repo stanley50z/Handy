@@ -100,16 +100,24 @@ fn reasoning_params(provider: &PostProcessProvider, effort: &str) -> ReasoningPa
     }
 }
 
-/// Endpoints (base_url|model) that rejected the reasoning fields with a
-/// 4xx. Remembered for the lifetime of the process so every dictation after the
-/// first skips the doomed attempt and goes straight to a plain request.
+/// Endpoint/model/effort combinations that rejected the reasoning fields
+/// with a 4xx. Remembered for the lifetime of the process so every dictation
+/// after the first skips the doomed attempt and goes straight to a plain
+/// request. Effort is part of the key because a rejection may be for one
+/// unsupported value (for example, max) rather than reasoning fields as a
+/// whole.
 fn reasoning_rejections() -> &'static Mutex<HashSet<String>> {
     static REJECTED: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
     REJECTED.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
-fn endpoint_key(provider: &PostProcessProvider, model: &str) -> String {
-    format!("{}|{}", provider.base_url.trim_end_matches('/'), model)
+fn reasoning_rejection_key(provider: &PostProcessProvider, model: &str, effort: &str) -> String {
+    format!(
+        "{}|{}|{}",
+        provider.base_url.trim_end_matches('/'),
+        model,
+        effort
+    )
 }
 
 fn is_known_rejected(key: &str) -> bool {
@@ -453,7 +461,11 @@ pub async fn send_chat_completion_with_schema(
         },
     });
 
-    let key = endpoint_key(provider, model);
+    let key = reasoning_rejection_key(
+        provider,
+        model,
+        reasoning_effort.as_deref().unwrap_or("provider-default"),
+    );
     let reasoning = match reasoning_effort.as_deref() {
         Some(effort) if !is_known_rejected(&key) => reasoning_params(provider, effort),
         _ => ReasoningParams::default(),
@@ -512,8 +524,10 @@ pub async fn send_chat_completion_with_schema(
 
         if status.is_success() {
             info!(
-                "Retry without reasoning fields succeeded; '{}' (model '{}') will skip them from now on",
-                sanitized_url_for_log(base_url), model
+                "Retry without reasoning fields succeeded; '{}' (model '{}', effort '{}') will skip that effort from now on",
+                sanitized_url_for_log(base_url),
+                model,
+                reasoning_effort.as_deref().unwrap_or("provider-default")
             );
             remember_rejection(key);
         }
@@ -941,15 +955,25 @@ mod tests {
     }
 
     #[test]
-    fn rejection_memo_is_keyed_by_base_url_and_model() {
+    fn rejection_memo_is_keyed_by_base_url_model_and_effort() {
         let deepseek = provider("custom", "https://api.deepseek.com/");
-        let key = endpoint_key(&deepseek, "deepseek-chat");
-        assert_eq!(key, "https://api.deepseek.com|deepseek-chat");
+        let key = reasoning_rejection_key(&deepseek, "deepseek-chat", "max");
+        assert_eq!(key, "https://api.deepseek.com|deepseek-chat|max");
         assert!(!is_known_rejected(&key));
         remember_rejection(key.clone());
         assert!(is_known_rejected(&key));
-        // A different model on the same endpoint is tracked separately
-        assert!(!is_known_rejected(&endpoint_key(&deepseek, "other-model")));
+        // Rejecting max must not suppress another effort that may be supported.
+        assert!(!is_known_rejected(&reasoning_rejection_key(
+            &deepseek,
+            "deepseek-chat",
+            "high"
+        )));
+        // A different model on the same endpoint is tracked separately.
+        assert!(!is_known_rejected(&reasoning_rejection_key(
+            &deepseek,
+            "other-model",
+            "max"
+        )));
     }
 
     #[test]
